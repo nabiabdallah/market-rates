@@ -17,7 +17,7 @@ Pipeline (agents, skills, hooks) comes from the `java-pipeline` plugin — not f
 
 ## Architecture (enforced by `ArchitectureTest` — the build fails if you break it)
 ```
-io.github.nabiabdallah.marketrates
+io.github.bot.marketrates
 ├── domain/                  pure Java: entities, value objects, domain exceptions. NO framework imports.
 ├── application/
 │   ├── port/in/             use-case interfaces + command/result records

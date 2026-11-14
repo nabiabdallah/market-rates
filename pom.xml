@@ -13,7 +13,7 @@
     <relativePath/>
   </parent>
 
-  <groupId>io.github.nabiabdallah</groupId>
+  <groupId>io.github.bot</groupId>
   <artifactId>market-rates</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <name>market-rates</name>
