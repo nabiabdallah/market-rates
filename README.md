@@ -6,6 +6,8 @@ The agentic pipeline — **spec → plan → architect review → failing tests 
 `./mvnw verify` gate → code review** — comes from the `java-pipeline` plugin; this repo holds only
 code, docs and project permissions.
 
+Rates API and how to add an asset: [docs/rates.md](docs/rates.md).
+
 ## First run
 
 The whole path (machine setup, GitHub repo and secrets, deploy, upgrades) is in claude-factory's
