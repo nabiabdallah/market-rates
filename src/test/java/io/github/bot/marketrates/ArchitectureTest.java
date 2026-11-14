@@ -63,8 +63,7 @@ class ArchitectureTest {
             .should()
             .dependOnClassesThat()
             .resideInAnyPackage(
-                    "io.github.bot.marketrates.application.port.out..",
-                    "io.github.bot.marketrates.adapter.out..")
+                    "io.github.bot.marketrates.application.port.out..", "io.github.bot.marketrates.adapter.out..")
             .orShould()
             .dependOnClassesThat()
             .haveSimpleNameEndingWith("Service")
@@ -82,16 +81,14 @@ class ArchitectureTest {
     static final ArchRule sql_only_in_persistence_adapters_and_config = noClasses()
             .that()
             .resideOutsideOfPackages(
-                    "io.github.bot.marketrates.adapter.out.persistence..",
-                    "io.github.bot.marketrates.config..")
+                    "io.github.bot.marketrates.adapter.out.persistence..", "io.github.bot.marketrates.config..")
             .should()
             .dependOnClassesThat()
             .resideInAnyPackage("java.sql..", "javax.sql..", "org.springframework.jdbc..", "org.flywaydb..")
             .because("SQL, connections and migrations stay behind outbound persistence adapters");
 
     @ArchTest
-    static final ArchRule adapters_are_independent = slices().matching(
-                    "io.github.bot.marketrates.adapter.(*).(*)..")
+    static final ArchRule adapters_are_independent = slices().matching("io.github.bot.marketrates.adapter.(*).(*)..")
             .should()
             .notDependOnEachOther()
             .because("each integration is isolated behind its own port");
