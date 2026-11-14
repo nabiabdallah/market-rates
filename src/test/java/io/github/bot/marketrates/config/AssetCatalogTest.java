@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.bot.marketrates.domain.Asset;
 import io.github.bot.marketrates.domain.AssetKind;
+import io.github.bot.marketrates.testsupport.LogCapture;
 import java.math.RoundingMode;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -175,16 +176,27 @@ class AssetCatalogTest {
         assertThat(bind(props).staleAfter().toSeconds()).isEqualTo(60);
     }
 
+    // Criterion 2: an asset more is a config entry, so a worst case longer than the interval is a warning.
     @Test
-    void sequential_provider_calls_that_cannot_fit_in_the_poll_interval_fail_startup() {
+    void sequential_provider_calls_that_cannot_fit_in_the_poll_interval_warn_and_start() {
         var props = validProps();
         props.put("market-rates.binance.connect-timeout", "3s");
         props.put("market-rates.binance.read-timeout", "3s");
 
-        assertThatThrownBy(() -> build(props))
-                .isInstanceOf(IllegalStateException.class)
-                .message()
-                .containsAnyOf("market-rates.poll-interval", "market-rates.binance");
+        try (var logs = LogCapture.start()) {
+            assertThat(build(props)).hasSize(3);
+
+            assertThat(logs.warnText()).contains("market-rates.poll-interval").contains("binance");
+            assertThat(logs.text()).doesNotContain("BTCUSDT0");
+        }
+    }
+
+    @Test
+    void a_fourth_asset_with_the_default_timeouts_and_interval_starts() {
+        var props = validProps();
+        asset(props, 3, "sol-usdt", "SOL/USDT", "binance", "SOLUSDT3", "USDT");
+
+        assertThat(build(props)).hasSize(4);
     }
 
     @Test

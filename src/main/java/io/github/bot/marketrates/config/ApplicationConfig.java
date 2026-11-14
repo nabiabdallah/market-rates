@@ -1,7 +1,6 @@
 package io.github.bot.marketrates.config;
 
 import io.github.bot.marketrates.adapter.out.binance.BinanceRateGateway;
-import io.github.bot.marketrates.adapter.out.binance.ErrorSanitizingObservationFilter;
 import io.github.bot.marketrates.application.RatesService;
 import io.github.bot.marketrates.application.port.out.RateGateway;
 import io.micrometer.observation.ObservationRegistry;
@@ -12,7 +11,6 @@ import java.util.stream.Collectors;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.client.RestClient;
 
 /**
  * The only place that knows which adapter implements which port. Declare a {@code @Bean} per use case
@@ -29,13 +27,9 @@ public class ApplicationConfig {
 
     @Bean
     RateGateway binanceRateGateway(MarketRatesProperties props, ObservationRegistry observations) {
-        observations.observationConfig().observationFilter(new ErrorSanitizingObservationFilter());
         var binance = props.binance();
         return BinanceRateGateway.create(
-                binance.baseUrl(),
-                binance.connectTimeout(),
-                binance.readTimeout(),
-                RestClient.builder().observationRegistry(observations));
+                binance.baseUrl(), binance.connectTimeout(), binance.readTimeout(), observations);
     }
 
     @Bean

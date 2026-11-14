@@ -7,6 +7,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Turns the configured entries into {@link Asset}s and rejects a bad configuration at startup. Messages name
@@ -14,6 +16,7 @@ import java.util.regex.Pattern;
  */
 final class AssetCatalog {
 
+    private static final Logger log = LoggerFactory.getLogger(AssetCatalog.class);
     private static final Pattern KEBAB = Pattern.compile("[a-z0-9]+(-[a-z0-9]+)*");
 
     private AssetCatalog() {}
@@ -69,14 +72,20 @@ final class AssetCatalog {
         }
     }
 
-    /** A provider's calls are sequential: assets x (connect + read timeout) must fit in the poll interval. */
+    /**
+     * A provider's calls are sequential, so its worst-case poll is assets x (connect + read timeout). Longer than
+     * the poll interval is a warning, not a failure: polls are fixed-delay, so a slow one delays the next and never
+     * overlaps it, and adding an asset must stay a config change (spec 0001, criterion 2).
+     */
     private static void validateBudget(MarketRatesProperties props, List<Asset> assets) {
         long binanceAssets =
                 assets.stream().filter(a -> "binance".equals(a.provider())).count();
         Duration perCall = props.binance().connectTimeout().plus(props.binance().readTimeout());
         if (perCall.multipliedBy(binanceAssets).compareTo(props.pollInterval()) > 0) {
-            throw new IllegalStateException("market-rates.binance timeouts times the number of binance assets "
-                    + "exceed market-rates.poll-interval");
+            log.warn(
+                    "A slow provider can make a poll longer than market-rates.poll-interval; rates may go stale"
+                            + " provider=binance assets={}",
+                    binanceAssets);
         }
     }
 

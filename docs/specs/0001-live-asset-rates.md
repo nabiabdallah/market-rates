@@ -26,7 +26,8 @@ keyed provider the owner has not named yet; they get their own spec.
 **Decided (issue #3, 2026-11-14).** The owner chose crypto first. The other answers are the draft's
 recommendations, which the owner accepts by merging this spec:
 - Provider: Binance spot public API for the crypto pairs; no key.
-- Freshness: poll every 10 s, configurable per provider; no streaming.
+- Freshness: poll every 10 s, configurable; no streaming. One interval for all providers until a second
+  provider exists (ADR 0002).
 - Provider down or rate old: the last rate with `asOf` and `stale=true`; an error only when never fetched.
 - Quote currency: USDT as named; no conversion to USD.
 - Callers: public read-only; scopes come when the service gets authentication.

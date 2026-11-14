@@ -30,7 +30,6 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.client.RestClient;
 
 /** Criteria 6, 7, 9, 12, 15 against a local HTTP server standing in for Binance. */
 class BinanceRateGatewayTest {
@@ -74,11 +73,42 @@ class BinanceRateGatewayTest {
     }
 
     private BinanceRateGateway gateway() {
-        return gateway(RestClient.builder(), Duration.ofSeconds(1), Duration.ofSeconds(2));
+        return gateway(ObservationRegistry.NOOP, Duration.ofSeconds(1), Duration.ofSeconds(2));
     }
 
-    private BinanceRateGateway gateway(RestClient.Builder builder, Duration connect, Duration read) {
-        return BinanceRateGateway.create(baseUrl(), connect, read, builder);
+    private BinanceRateGateway gateway(ObservationRegistry observations, Duration connect, Duration read) {
+        return BinanceRateGateway.create(baseUrl(), connect, read, observations);
+    }
+
+    /** What a tracing handler sees: errors at the moment they are recorded, key values when the call ends. */
+    private static final class Recorded implements ObservationHandler<Observation.Context> {
+        final List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
+        final List<Map<String, String>> keyValues = Collections.synchronizedList(new ArrayList<>());
+        final List<String> names = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public boolean supportsContext(Observation.Context context) {
+            return true;
+        }
+
+        @Override
+        public void onError(Observation.Context context) {
+            errors.add(context.getError());
+        }
+
+        @Override
+        public void onStop(Observation.Context context) {
+            var kv = new java.util.HashMap<String, String>();
+            context.getAllKeyValues().forEach(k -> kv.put(k.getKey(), k.getValue()));
+            keyValues.add(kv);
+            names.add(context.getName());
+        }
+    }
+
+    private static ObservationRegistry registry(Recorded recorded) {
+        var registry = ObservationRegistry.create();
+        registry.observationConfig().observationHandler(recorded);
+        return registry;
     }
 
     private static void respond(HttpExchange ex, int status, String body) {
@@ -121,13 +151,18 @@ class BinanceRateGatewayTest {
         assertThat(quotes.get("BTCUSDT").quoteTime()).isNull();
     }
 
+    // The single-symbol endpoint answers with one object; an array would be another symbol's price.
     @Test
-    void array_response_is_parsed_too() {
-        handler = ex -> respond(ex, 200, "[" + priceBody(symbolOf(ex), "3400.5") + "]");
+    void an_array_response_is_not_taken_as_the_symbols_price() {
+        handler = ex -> {
+            if (symbolOf(ex).equals("ETHUSDT")) {
+                respond(ex, 200, "[" + priceBody("BTCUSDT", "3400.5") + "]");
+            } else {
+                respond(ex, 200, priceBody(symbolOf(ex), "5"));
+            }
+        };
 
-        var quotes = gateway().fetch(List.of(eth));
-
-        assertThat(quotes.get("ETHUSDT").price()).isEqualByComparingTo("3400.5");
+        assertThat(gateway().fetch(List.of(btc, eth))).containsOnlyKeys("BTCUSDT");
     }
 
     // Criterion 12
@@ -198,6 +233,32 @@ class BinanceRateGatewayTest {
         }
     }
 
+    // A provider that rate-limits (429) or bans (418) is left alone for the rest of the poll.
+    @Test
+    void a_rate_limited_symbol_ends_the_poll_and_keeps_the_rates_already_fetched() {
+        handler = ex -> {
+            if (symbolOf(ex).equals("ETHUSDT")) {
+                respond(ex, 429, "{\"msg\":\"" + BODY_TEXT + "\"}");
+            } else {
+                respond(ex, 200, priceBody(symbolOf(ex), "7"));
+            }
+        };
+
+        var quotes = gateway().fetch(List.of(btc, eth, qnt));
+
+        assertThat(quotes).containsOnlyKeys("BTCUSDT");
+        assertThat(requests).hasSize(2);
+    }
+
+    @Test
+    void a_ban_418_on_the_first_symbol_sends_no_further_request() {
+        handler = ex -> respond(ex, 418, "{\"msg\":\"" + BODY_TEXT + "\"}");
+
+        assertThatThrownBy(() -> gateway().fetch(List.of(btc, eth, qnt))).isInstanceOf(RateProviderException.class);
+
+        assertThat(requests).hasSize(1);
+    }
+
     @Test
     void a_response_slower_than_the_read_timeout_fails_the_symbol_and_logs_only_the_exception_class() {
         handler = ex -> {
@@ -208,7 +269,7 @@ class BinanceRateGatewayTest {
             }
             respond(ex, 200, priceBody(symbolOf(ex), "1"));
         };
-        var gateway = gateway(RestClient.builder(), Duration.ofSeconds(1), Duration.ofMillis(300));
+        var gateway = gateway(ObservationRegistry.NOOP, Duration.ofSeconds(1), Duration.ofMillis(300));
 
         try (var logs = LogCapture.start()) {
             assertThatThrownBy(() -> gateway.fetch(List.of(btc))).isInstanceOf(RateProviderException.class);
@@ -269,74 +330,63 @@ class BinanceRateGatewayTest {
 
     // Criterion 15
     @Test
-    void observations_carry_the_uri_template_and_no_symbol_in_any_key_value() {
+    void each_call_is_one_observation_tagged_with_provider_template_and_outcome_and_no_symbol() {
         handler = ex -> respond(ex, 200, priceBody(symbolOf(ex), "1"));
-        var captured = new ArrayList<Map<String, String>>();
-        var registry = ObservationRegistry.create();
-        registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
-            @Override
-            public boolean supportsContext(Observation.Context context) {
-                return true;
-            }
+        var recorded = new Recorded();
 
-            @Override
-            public void onStop(Observation.Context context) {
-                var kv = new java.util.HashMap<String, String>();
-                context.getAllKeyValues().forEach(k -> kv.put(k.getKey(), k.getValue()));
-                synchronized (captured) {
-                    captured.add(kv);
-                }
-            }
-        });
-
-        gateway(RestClient.builder().observationRegistry(registry), Duration.ofSeconds(1), Duration.ofSeconds(2))
+        gateway(registry(recorded), Duration.ofSeconds(1), Duration.ofSeconds(2))
                 .fetch(List.of(btc, eth));
 
-        assertThat(captured).isNotEmpty();
-        assertThat(captured).allSatisfy(kv -> {
-            assertThat(kv.values()).noneMatch(v -> v.contains("BTCUSDT") || v.contains("ETHUSDT"));
-            assertThat(kv).containsKey("uri");
-            assertThat(kv.get("uri")).contains("/api/v3/ticker/price");
+        assertThat(recorded.names).containsExactly("market.rates.provider.request", "market.rates.provider.request");
+        assertThat(recorded.errors).isEmpty();
+        assertThat(recorded.keyValues).hasSize(2).allSatisfy(kv -> {
+            assertThat(kv.values()).noneMatch(v -> v.contains("BTCUSDT") || v.contains("ETHUSDT") || v.contains("?"));
+            assertThat(kv)
+                    .containsEntry("provider", "binance")
+                    .containsEntry("uri", "/api/v3/ticker/price")
+                    .containsEntry("outcome", "SUCCESS");
         });
     }
 
-    // Criterion 15 / ADR 0002: the error recorded on the observation (exported on spans) is clean too
+    // Criteria 12, 15 / ADR 0002. A tracing handler exports an error the moment it is recorded (onError), with
+    // its message, so that is where the URL, the symbol and the body must already be gone. RestClient's own
+    // observation fails this: it records its exception, whose message is the full URL, before any filter runs.
     @Test
-    void errors_recorded_on_observations_carry_no_url_symbol_or_body() {
-        var errors = new ArrayList<Throwable>();
-        var registry = ObservationRegistry.create();
-        registry.observationConfig().observationFilter(new ErrorSanitizingObservationFilter());
-        registry.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
-            @Override
-            public boolean supportsContext(Observation.Context context) {
-                return true;
-            }
-
-            @Override
-            public void onStop(Observation.Context context) {
-                if (context.getError() != null) {
-                    synchronized (errors) {
-                        errors.add(context.getError());
-                    }
-                }
-            }
-        });
+    void errors_reach_observation_handlers_without_url_symbol_or_body() {
+        var recorded = new Recorded();
+        var failing = gateway(registry(recorded), Duration.ofSeconds(1), Duration.ofSeconds(2));
         handler = ex -> respond(ex, 400, "{\"code\":-1121,\"msg\":\"" + BODY_TEXT + "\"}");
-        var failing = gateway(
-                RestClient.builder().observationRegistry(registry), Duration.ofSeconds(1), Duration.ofSeconds(2));
         assertThatThrownBy(() -> failing.fetch(List.of(btc))).isInstanceOf(RateProviderException.class);
         server.stop(0);
         assertThatThrownBy(() -> failing.fetch(List.of(btc))).isInstanceOf(RateProviderException.class);
 
-        assertThat(errors).hasSize(2).allSatisfy(e -> {
+        assertThat(recorded.errors).hasSize(2).allSatisfy(e -> {
             for (Throwable t = e; t != null; t = t.getCause()) {
                 assertThat(String.valueOf(t.getMessage()))
                         .doesNotContain("BTCUSDT")
                         .doesNotContain("symbol=")
                         .doesNotContain("/api/v3")
+                        .doesNotContain("127.0.0.1")
                         .doesNotContain(BODY_TEXT);
             }
         });
+        assertThat(recorded.keyValues).extracting(kv -> kv.get("outcome")).containsExactly("HTTP_ERROR", "IO_ERROR");
+        assertThat(recorded.keyValues)
+                .allSatisfy(kv -> assertThat(kv.values())
+                        .noneMatch(v -> v.contains("BTCUSDT") || v.contains("127.0.0.1") || v.contains("?")));
+    }
+
+    // The RestClient itself must not observe: its observation carries the full URL in the error and in http.url.
+    @Test
+    void the_http_client_records_no_observation_of_its_own() {
+        handler = ex -> respond(ex, 200, priceBody(symbolOf(ex), "1"));
+        var recorded = new Recorded();
+
+        gateway(registry(recorded), Duration.ofSeconds(1), Duration.ofSeconds(2))
+                .fetch(List.of(btc));
+
+        assertThat(recorded.names).containsExactly("market.rates.provider.request");
+        assertThat(recorded.keyValues).allSatisfy(kv -> assertThat(kv).doesNotContainKey("http.url"));
     }
 
     @Test

@@ -411,6 +411,54 @@ class RatesServiceTest {
                 .hasMessage("Rate not available yet");
     }
 
+    // Criterion 11: readers race a writer that alternates two quotes. Every read must be one of the two whole
+    // quotes; a rate stored apart from its asOf would show up as a mixed pair.
+    @Test
+    void concurrent_reads_never_see_a_rate_with_another_fetchs_as_of() throws Exception {
+        var timeA = Instant.parse("2026-11-14T09:59:00Z");
+        var timeB = Instant.parse("2026-11-14T10:00:07Z");
+        var quoteA = Map.of("BTCUSDT", new ProviderQuote(new BigDecimal("100"), timeA));
+        var quoteB = Map.of("BTCUSDT", new ProviderQuote(new BigDecimal("200"), timeB));
+        var turn = new java.util.concurrent.atomic.AtomicInteger();
+        binance.behaviour = assets -> turn.getAndIncrement() % 2 == 0 ? quoteA : quoteB;
+        var service = service(List.of(btc), binance);
+        service.poll("binance");
+
+        var done = new java.util.concurrent.atomic.AtomicBoolean();
+        var mixed = new AtomicReference<String>();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        Runnable reader = () -> {
+            while (!done.get() && mixed.get() == null) {
+                for (AssetRate view :
+                        List.of(service.get("btc-usdt"), service.list().get(0))) {
+                    boolean a = view.rate().value().compareTo(new BigDecimal("100")) == 0
+                            && view.asOf().equals(timeA);
+                    boolean b = view.rate().value().compareTo(new BigDecimal("200")) == 0
+                            && view.asOf().equals(timeB);
+                    if (!a && !b) {
+                        mixed.set(view.rate().value() + " at " + view.asOf());
+                    }
+                    reads.incrementAndGet();
+                }
+            }
+        };
+        var readers = List.of(new Thread(reader), new Thread(reader));
+        readers.forEach(Thread::start);
+        try {
+            for (int i = 0; i < 20_000 && mixed.get() == null; i++) {
+                service.poll("binance");
+            }
+        } finally {
+            done.set(true);
+            for (Thread t : readers) {
+                t.join(10_000);
+            }
+        }
+
+        assertThat(mixed.get()).isNull();
+        assertThat(reads.get()).isPositive();
+    }
+
     // Criterion 11
     @Test
     void a_read_during_a_poll_sees_the_complete_old_snapshot_then_the_complete_new_one() throws Exception {

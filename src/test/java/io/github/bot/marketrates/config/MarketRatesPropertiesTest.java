@@ -79,8 +79,7 @@ class MarketRatesPropertiesTest {
             "market-rates.assets[2].symbol=ETHUSDT", "market-rates.assets[2].quote-currency=USDT",
             "market-rates.assets[3].id=qnt-usdt", "market-rates.assets[3].name=QNT/USDT",
             "market-rates.assets[3].kind=CRYPTO", "market-rates.assets[3].provider=binance",
-            "market-rates.assets[3].symbol=QNTUSDT", "market-rates.assets[3].quote-currency=USDT",
-            "market-rates.poll-interval=20s"
+            "market-rates.assets[3].symbol=QNTUSDT", "market-rates.assets[3].quote-currency=USDT"
         };
         runner.withPropertyValues(withFourth).run(ctx -> {
             var props = ctx.getBean(MarketRatesProperties.class);
