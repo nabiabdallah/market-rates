@@ -2,6 +2,7 @@ package io.github.bot.marketrates.adapter.in.web;
 
 import io.github.bot.marketrates.domain.DomainException;
 import io.github.bot.marketrates.domain.NotFoundException;
+import io.github.bot.marketrates.domain.RateUnavailableException;
 import java.net.URI;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -20,8 +21,8 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
  * Maps exceptions to RFC 9457 problem responses.
  *
  * <ul>
- *   <li>{@link NotFoundException} → 404, other {@link DomainException} → 422, with the exception message
- *       as detail.
+ *   <li>{@link NotFoundException} → 404, {@link RateUnavailableException} → 503, other {@link DomainException}
+ *       → 422, with the exception message as detail.
  *   <li>Spring MVC's own exceptions (missing header, validation, malformed body, type mismatch, 405, ...)
  *       → their usual 4xx, via the superclass.
  *   <li>Anything else → generic 500 with an {@code errorId}; the log carries the same id and the stack
@@ -41,6 +42,11 @@ public class ErrorHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     ProblemDetail notFound(NotFoundException e) {
         return withInstance(ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage()));
+    }
+
+    @ExceptionHandler(RateUnavailableException.class)
+    ProblemDetail unavailable(RateUnavailableException e) {
+        return withInstance(ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage()));
     }
 
     @ExceptionHandler(DomainException.class)
