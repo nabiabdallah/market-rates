@@ -26,7 +26,7 @@ jobs:
       # factory-parent comes from GitHub Packages in the claude-factory repo. Maven packages are
       # repository-scoped there, so this repo's GITHUB_TOKEN can't read them: the repo secret
       # FACTORY_PACKAGES_TOKEN holds a classic PAT with only read:packages.
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: '21'
@@ -107,7 +107,8 @@ jobs:
   # Jib builds without a Docker daemon and pushes with this repo's own token: one image per platform (amd64, and
   # arm64 for the cluster's nodes, claude-factory ADR 0034) under one index, which is what the tags name. The
   # index and each platform's image are signed keylessly (Sigstore, GitHub OIDC), and the SBOM, which is the same
-  # for every platform, is attached to the index as a signed attestation.
+  # for every platform, is attached to the index as a signed attestation. The push uses Docker's manifest format:
+  # Jib can't build an OCI index yet. claude-factory's CI makes this same push to a throwaway registry.
   image:
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -120,7 +121,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: '21'
@@ -132,7 +133,7 @@ jobs:
       - name: Build and push ghcr.io image (tags <sha>, main; linux/amd64 and linux/arm64)
         run: >
           ./mvnw -B -DskipTests package jib:build
-          -Djib.from.platforms=linux/amd64,linux/arm64
+          -Djib.from.platforms=linux/amd64,linux/arm64 -Djib.container.format=Docker
           -Djib.to.tags=${{ github.sha }},main
           -Djib.to.auth.username=${{ github.actor }}
           -Djib.to.auth.password=${{ github.token }}
