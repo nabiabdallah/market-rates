@@ -27,4 +27,4 @@ patches:
           value: deployment.environment.name=prod
 images:
   - name: ghcr.io/nabiabdallah/market-rates
-    newTag: unreleased
+    newTag: 82b74286103bcc714e314cec661c53edacfcc1b5
