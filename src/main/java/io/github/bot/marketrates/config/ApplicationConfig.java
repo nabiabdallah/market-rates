@@ -33,6 +33,13 @@ public class ApplicationConfig {
     }
 
     @Bean
+    RateGateway binanceFuturesRateGateway(MarketRatesProperties props, ObservationRegistry observations) {
+        var futures = props.binanceFutures();
+        return BinanceRateGateway.createFutures(
+                futures.baseUrl(), futures.connectTimeout(), futures.readTimeout(), observations);
+    }
+
+    @Bean
     RatesService ratesService(MarketRatesProperties props, List<RateGateway> gateways, Clock clock) {
         Set<String> providers = gateways.stream().map(RateGateway::provider).collect(Collectors.toSet());
         var assets = AssetCatalog.build(props, providers);

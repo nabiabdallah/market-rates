@@ -21,6 +21,7 @@ public record MarketRatesProperties(
         Map<AssetKind, Integer> scale,
         List<AssetEntry> assets,
         @DefaultValue Binance binance,
+        @DefaultValue BinanceFutures binanceFutures,
         @DefaultValue Polling polling) {
 
     public MarketRatesProperties {
@@ -29,6 +30,10 @@ public record MarketRatesProperties(
         }
         var scales = new EnumMap<AssetKind, Integer>(AssetKind.class);
         scales.put(AssetKind.CRYPTO, 8);
+        scales.put(AssetKind.METAL, 2);
+        scales.put(AssetKind.FX, 5);
+        scales.put(AssetKind.EQUITY, 2);
+        scales.put(AssetKind.INDEX, 2);
         if (scale != null) {
             scales.putAll(scale);
         }
@@ -42,6 +47,11 @@ public record MarketRatesProperties(
 
     public record Binance(
             @DefaultValue("https://api.binance.com") String baseUrl,
+            @DefaultValue("1s") Duration connectTimeout,
+            @DefaultValue("2s") Duration readTimeout) {}
+
+    public record BinanceFutures(
+            @DefaultValue("https://fapi.binance.com") String baseUrl,
             @DefaultValue("1s") Duration connectTimeout,
             @DefaultValue("2s") Duration readTimeout) {}
 

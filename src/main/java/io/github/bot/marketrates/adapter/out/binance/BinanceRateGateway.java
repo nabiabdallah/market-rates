@@ -9,6 +9,7 @@ import io.micrometer.observation.ObservationRegistry;
 import java.math.BigDecimal;
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,10 +19,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Binance spot public REST API (no key). One sequential request per symbol, so a symbol Binance does not list
+ * Binance public REST API (no key), spot or USDⓈ-M futures: the two differ only in provider name, ticker path
+ * and whether the answer carries a quote time.  One sequential request per symbol, so a symbol Binance does not list
  * (HTTP 400) cannot break the others. Worst-case poll time is assets x (connect + read timeout).
  *
  * <p>Logs carry the provider name and the HTTP status or exception class only: never the URL (query string),
@@ -37,8 +40,10 @@ import tools.jackson.databind.json.JsonMapper;
 public class BinanceRateGateway implements RateGateway {
 
     static final String PROVIDER = "binance";
+    static final String FUTURES_PROVIDER = "binance-futures";
     static final String OBSERVATION = "market.rates.provider.request";
-    private static final String TICKER = "/api/v3/ticker/price";
+    private static final String SPOT_TICKER = "/api/v3/ticker/price";
+    private static final String FUTURES_TICKER = "/fapi/v1/ticker/price";
     private static final Logger log = LoggerFactory.getLogger(BinanceRateGateway.class);
 
     /** Plain decimals only: exponent forms such as 1E+999999999 would make rounding expensive. */
@@ -48,14 +53,43 @@ public class BinanceRateGateway implements RateGateway {
 
     private final RestClient client;
     private final ObservationRegistry observations;
+    private final String provider;
+    private final String ticker;
+    private final boolean readsQuoteTime;
 
-    BinanceRateGateway(RestClient client, ObservationRegistry observations) {
+    BinanceRateGateway(
+            RestClient client,
+            ObservationRegistry observations,
+            String provider,
+            String ticker,
+            boolean readsQuoteTime) {
         this.client = client;
         this.observations = observations;
+        this.provider = provider;
+        this.ticker = ticker;
+        this.readsQuoteTime = readsQuoteTime;
     }
 
+    /** The spot API: provider {@code binance}, no quote time. */
     public static BinanceRateGateway create(
             String baseUrl, Duration connectTimeout, Duration readTimeout, ObservationRegistry observations) {
+        return build(baseUrl, connectTimeout, readTimeout, observations, PROVIDER, SPOT_TICKER, false);
+    }
+
+    /** The USDⓈ-M futures API: provider {@code binance-futures}; the response {@code time} is the quote time. */
+    public static BinanceRateGateway createFutures(
+            String baseUrl, Duration connectTimeout, Duration readTimeout, ObservationRegistry observations) {
+        return build(baseUrl, connectTimeout, readTimeout, observations, FUTURES_PROVIDER, FUTURES_TICKER, true);
+    }
+
+    private static BinanceRateGateway build(
+            String baseUrl,
+            Duration connectTimeout,
+            Duration readTimeout,
+            ObservationRegistry observations,
+            String provider,
+            String ticker,
+            boolean readsQuoteTime) {
         var factory = new JdkClientHttpRequestFactory(
                 HttpClient.newBuilder().connectTimeout(connectTimeout).build());
         factory.setReadTimeout(readTimeout);
@@ -67,12 +101,12 @@ public class BinanceRateGateway implements RateGateway {
                     throw new ProviderHttpException(response.getStatusCode().value());
                 })
                 .build();
-        return new BinanceRateGateway(client, observations);
+        return new BinanceRateGateway(client, observations, provider, ticker, readsQuoteTime);
     }
 
     @Override
     public String provider() {
-        return PROVIDER;
+        return provider;
     }
 
     @Override
@@ -81,63 +115,82 @@ public class BinanceRateGateway implements RateGateway {
         for (Asset asset : assets) {
             var fetched = fetchOne(asset.symbol());
             if (fetched.price() != null) {
-                quotes.put(asset.symbol(), new ProviderQuote(fetched.price(), null));
+                quotes.put(asset.symbol(), new ProviderQuote(fetched.price(), fetched.quoteTime()));
             }
             if (fetched.rateLimited()) {
-                log.warn("Provider is rate limiting, the rest of this poll is skipped provider={}", PROVIDER);
+                log.warn("Provider is rate limiting, the rest of this poll is skipped provider={}", provider);
                 break;
             }
         }
         if (quotes.isEmpty() && !assets.isEmpty()) {
-            throw new RateProviderException("Binance returned no usable rate");
+            throw new RateProviderException("Provider returned no usable rate");
         }
         return quotes;
     }
 
-    private record Fetched(BigDecimal price, boolean rateLimited) {
-        static final Fetched NOTHING = new Fetched(null, false);
+    private record Fetched(BigDecimal price, Instant quoteTime, boolean rateLimited) {
+        static final Fetched NOTHING = new Fetched(null, null, false);
     }
 
-    /** The price text of a single-ticker object; null when absent or when the answer is not an object. */
-    private static String priceOf(String json) {
+    /** The single-ticker object, or null when the answer is not an object. */
+    private static JsonNode objectOf(String json) {
         if (json == null) {
             return null;
         }
         var node = MAPPER.readTree(json);
-        var price = node.isObject() ? node.get("price") : null;
+        return node.isObject() ? node : null;
+    }
+
+    /** A positive plain-decimal price; null when absent, not a string, unparsable or not positive. */
+    private static BigDecimal priceOf(JsonNode object) {
+        var price = object == null ? null : object.get("price");
         var text = price == null || !price.isString() ? null : price.asString();
-        return text != null && PLAIN_DECIMAL.matcher(text).matches() ? text : null;
+        if (text == null || !PLAIN_DECIMAL.matcher(text).matches()) {
+            return null;
+        }
+        var value = new BigDecimal(text);
+        return value.signum() > 0 ? value : null;
+    }
+
+    /** The provider's quote time (integral epoch milliseconds, positive); null when absent or anything else. */
+    private Instant quoteTimeOf(JsonNode object) {
+        var time = readsQuoteTime && object != null ? object.get("time") : null;
+        if (time == null || !time.isIntegralNumber() || !time.canConvertToLong() || time.longValue() <= 0) {
+            return null;
+        }
+        return Instant.ofEpochMilli(time.longValue());
     }
 
     private Fetched fetchOne(String symbol) {
         var observation = Observation.createNotStarted(OBSERVATION, observations)
-                .lowCardinalityKeyValue("provider", PROVIDER)
-                .lowCardinalityKeyValue("uri", TICKER)
+                .lowCardinalityKeyValue("provider", provider)
+                .lowCardinalityKeyValue("uri", ticker)
                 .start();
         var outcome = "SUCCESS";
         try {
             var json = client.get()
-                    .uri(TICKER + "?symbol={symbol}", symbol)
+                    .uri(ticker + "?symbol={symbol}", symbol)
                     .retrieve()
                     .body(String.class);
-            var price = priceOf(json);
+            var object = objectOf(json);
+            var price = priceOf(object);
             if (price == null) {
                 outcome = "NO_PRICE";
-                log.warn("Provider returned no price provider={}", PROVIDER);
+                log.warn("Provider returned no price provider={}", provider);
                 return Fetched.NOTHING;
             }
-            return new Fetched(new BigDecimal(price), false);
+            return new Fetched(price, quoteTimeOf(object), false);
         } catch (ProviderHttpException e) {
             outcome = "HTTP_ERROR";
             observation.error(new ProviderCallError("HTTP " + e.status()));
-            log.warn("Provider request failed provider={} status={}", PROVIDER, e.status());
-            return new Fetched(null, e.status() == 429 || e.status() == 418);
+            log.warn("Provider request failed provider={} status={}", provider, e.status());
+            return new Fetched(null, null, e.status() == 429 || e.status() == 418);
         } catch (RuntimeException e) {
             outcome = "IO_ERROR";
             observation.error(new ProviderCallError(e.getClass().getSimpleName()));
             log.warn(
                     "Provider request failed provider={} error={}",
-                    PROVIDER,
+                    provider,
                     e.getClass().getSimpleName());
             return Fetched.NOTHING;
         } finally {

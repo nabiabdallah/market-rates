@@ -151,6 +151,18 @@ class BinanceRateGatewayTest {
         assertThat(quotes.get("BTCUSDT").quoteTime()).isNull();
     }
 
+    // Spec 0002: only the futures adapter reads `time`; the spot adapter keeps the fetch time.
+    @Test
+    void spot_adapter_ignores_a_time_field_in_the_response() {
+        handler = ex -> respond(
+                ex, 200, "{\"symbol\":\"" + symbolOf(ex) + "\",\"price\":\"1.09890000\",\"time\":1794737730000}");
+
+        var quotes = gateway().fetch(List.of(btc));
+
+        assertThat(quotes.get("BTCUSDT").price()).isEqualTo(new BigDecimal("1.09890000"));
+        assertThat(quotes.get("BTCUSDT").quoteTime()).isNull();
+    }
+
     // The single-symbol endpoint answers with one object; an array would be another symbol's price.
     @Test
     void an_array_response_is_not_taken_as_the_symbols_price() {

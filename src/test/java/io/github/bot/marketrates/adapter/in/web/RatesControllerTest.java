@@ -102,6 +102,73 @@ class RatesControllerTest {
         assertThat(rate).isInstanceOf(String.class);
     }
 
+    // Spec 0002 criteria 4, 5, 6: new kinds, their scales and the string rate
+    @Test
+    void new_kinds_are_listed_with_their_scale_and_the_rate_as_a_json_string() throws Exception {
+        var gold = new Asset(
+                "xau-usdt", "Gold", AssetKind.METAL, "binance-futures", "XAUUSDT", "USDT", 2, RoundingMode.HALF_EVEN);
+        var eur = new Asset(
+                "eur-usdt", "EUR/USDT", AssetKind.FX, "binance", "EURUSDT", "USDT", 5, RoundingMode.HALF_EVEN);
+        var nvda = new Asset(
+                "nvda-usdt",
+                "Nvidia",
+                AssetKind.EQUITY,
+                "binance-futures",
+                "NVDAUSDT",
+                "USDT",
+                2,
+                RoundingMode.HALF_EVEN);
+        var spy = new Asset(
+                "spy-usdt",
+                "S&P 500 (SPY)",
+                AssetKind.INDEX,
+                "binance-futures",
+                "SPYUSDT",
+                "USDT",
+                2,
+                RoundingMode.HALF_EVEN);
+        var mvc = mvc(
+                new AssetRate(gold, Rate.of(new BigDecimal("3843.85"), 2, RoundingMode.HALF_EVEN), AS_OF, false),
+                new AssetRate(eur, Rate.of(new BigDecimal("1.09890000"), 5, RoundingMode.HALF_EVEN), AS_OF, false),
+                new AssetRate(nvda, Rate.of(new BigDecimal("161.33000"), 2, RoundingMode.HALF_EVEN), AS_OF, false),
+                new AssetRate(spy, Rate.of(new BigDecimal("512.3"), 2, RoundingMode.HALF_EVEN), AS_OF, false));
+
+        var body = mvc.perform(get("/api/v1/rates"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rates[0].kind").value("METAL"))
+                .andExpect(jsonPath("$.rates[0].rate").value("3843.85"))
+                .andExpect(jsonPath("$.rates[0].quoteCurrency").value("USDT"))
+                .andExpect(jsonPath("$.rates[1].kind").value("FX"))
+                .andExpect(jsonPath("$.rates[1].rate").value("1.09890"))
+                .andExpect(jsonPath("$.rates[2].kind").value("EQUITY"))
+                .andExpect(jsonPath("$.rates[2].rate").value("161.33"))
+                .andExpect(jsonPath("$.rates[3].kind").value("INDEX"))
+                .andExpect(jsonPath("$.rates[3].rate").value("512.30"))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        for (int i = 0; i < 4; i++) {
+            assertThat((Object) JsonPath.read(body, "$.rates[" + i + "].rate")).isInstanceOf(String.class);
+        }
+    }
+
+    @Test
+    void get_by_id_of_a_metal_returns_the_provider_time_as_as_of() throws Exception {
+        var gold = new Asset(
+                "xau-usdt", "Gold", AssetKind.METAL, "binance-futures", "XAUUSDT", "USDT", 2, RoundingMode.HALF_EVEN);
+        var asOf = Instant.parse("2026-11-15T10:15:30Z");
+
+        mvc(new AssetRate(gold, Rate.of(new BigDecimal("3843.85"), 2, RoundingMode.HALF_EVEN), asOf, false))
+                .perform(get("/api/v1/rates/{id}", "xau-usdt"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("xau-usdt"))
+                .andExpect(jsonPath("$.name").value("Gold"))
+                .andExpect(jsonPath("$.rate").value("3843.85"))
+                .andExpect(jsonPath("$.asOf").value("2026-11-15T10:15:30Z"))
+                .andExpect(jsonPath("$.stale").value(false));
+    }
+
     @Test
     void tiny_rate_is_plain_decimal_not_scientific_notation() throws Exception {
         var mvc = mvc(fresh(asset("btc-usdt", "BTC/USDT"), "0.00000001"));
