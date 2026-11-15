@@ -1,6 +1,6 @@
 # Spec: Gold, Silver, EUR/USDT, Nvidia and S&P 500 rates from Binance
 
-- Status: Draft
+- Status: Approved
 - Owner: repository owner (issue #9)
 - Related ADRs: 0001 (hexagonal architecture), 0002 (in-memory polled rates). Extends spec 0001 (Approved, not edited).
 
@@ -124,11 +124,13 @@ until its first poll. Deploy to a region where Binance does not answer 451.
 - Logs: provider name, asset id, status only. No secret, no PII.
 - Retention: none.
 
+**Decided (issue #9, 2026-11-15).** The owner chose Binance for all five assets. The answers below are the
+draft's recommendations, which the owner accepts by merging this spec:
+- `stale-after` stays one global value (30 s). `stale` means "not refreshed by the service", not "market
+  closed"; there is no market-hours handling (criterion 13).
+- `asOf` for futures is the response `time`, even when it is much older than the fetch, so consumers see the
+  real quote age (spec 0001).
+- The euro's id is `eur-usdt`: the quote is USDT, and a USD name would mislead.
+
 ## Open questions
-- Should `stale-after` stay one global value (30 s) even though TradFi perpetuals may report an unchanged
-  `time` outside market hours? Recommended: yes, and let `stale` mean "not refreshed by us", not "market closed",
-  because the owner asked for no market-hours handling. Criterion 13 assumes this (assumes Q1).
-- Should `asOf` for futures use the response `time` even if it is older than the fetch by a long margin?
-  Recommended: yes, as spec 0001 says (provider time when supplied); consumers see the real quote age (assumes Q2).
-- Should the asset id for the euro be `eur-usdt` as in the idea, rather than `eur-usd`? Recommended: `eur-usdt`,
-  since the quote is USDT and a USD name would mislead.
+- none
