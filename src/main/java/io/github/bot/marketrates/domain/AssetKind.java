@@ -1,6 +1,10 @@
 package io.github.bot.marketrates.domain;
 
-/** The kinds of asset the service can price. A new kind needs code (and usually a new provider adapter). */
+/** The kinds of asset the service can price. A new kind needs code. */
 public enum AssetKind {
-    CRYPTO
+    CRYPTO,
+    METAL,
+    FX,
+    EQUITY,
+    INDEX
 }

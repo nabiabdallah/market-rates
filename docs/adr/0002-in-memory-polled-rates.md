@@ -41,3 +41,10 @@ is down, and must not expose provider URLs, symbols or response bodies in logs o
 - A second provider needs its own adapter, its own timeout settings and its own budget warning.
 - Review of PR #5 (2026-11-14): the first version failed startup on a fourth asset and sanitised span errors in
   an `ObservationFilter`, which runs too late. Both are changed above.
+
+## Amendment (spec 0002): second Binance provider
+- `binance-futures` is a second provider of the same Binance integration. It reuses `BinanceRateGateway`,
+  parameterised by provider name, ticker path and whether the response carries a quote time, instead of getting a
+  separate adapter class. It has its own base URL, timeouts and budget warning, and its own poll task.
+- The poll interval stays global even with two providers (spec 0002).
+- For futures, `asOf` is the response `time` (the provider's quote time); it falls back to the fetch time when absent.

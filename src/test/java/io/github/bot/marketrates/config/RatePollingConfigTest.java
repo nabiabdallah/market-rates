@@ -7,7 +7,6 @@ import io.github.bot.marketrates.application.port.in.PollRatesUseCase;
 import io.github.bot.marketrates.application.port.out.ProviderQuote;
 import io.github.bot.marketrates.application.port.out.RateGateway;
 import io.github.bot.marketrates.domain.Asset;
-import java.math.RoundingMode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -77,14 +76,10 @@ class RatePollingConfigTest {
     @Test
     void the_scheduler_polls_each_provider_at_the_interval_and_keeps_going_after_a_failure() throws Exception {
         var interval = Duration.ofMillis(50);
-        var props = new MarketRatesProperties(
-                interval,
-                null,
-                RoundingMode.HALF_EVEN,
-                null,
-                null,
-                new MarketRatesProperties.Binance("http://localhost", Duration.ofSeconds(1), Duration.ofSeconds(2)),
-                new MarketRatesProperties.Polling(true));
+        var props = new org.springframework.boot.context.properties.bind.Binder(
+                        new org.springframework.boot.context.properties.source.MapConfigurationPropertySource(
+                                Map.of("market-rates.poll-interval", "50ms")))
+                .bindOrCreate("market-rates", MarketRatesProperties.class);
         var polls = new CopyOnWriteArrayList<String>();
         var enough = new CountDownLatch(6);
         PollRatesUseCase useCase = provider -> {

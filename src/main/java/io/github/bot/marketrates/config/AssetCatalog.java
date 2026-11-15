@@ -51,16 +51,16 @@ final class AssetCatalog {
     }
 
     private static void validateTiming(MarketRatesProperties props) {
-        var binance = props.binance();
-        if (!notBlank(binance.baseUrl())) {
-            throw new IllegalStateException("market-rates.binance.base-url is required");
-        }
-        if (binance.connectTimeout().isNegative() || binance.connectTimeout().isZero()) {
-            throw new IllegalStateException("market-rates.binance.connect-timeout must be positive");
-        }
-        if (binance.readTimeout().isNegative() || binance.readTimeout().isZero()) {
-            throw new IllegalStateException("market-rates.binance.read-timeout must be positive");
-        }
+        validateProvider(
+                "market-rates.binance",
+                props.binance().baseUrl(),
+                props.binance().connectTimeout(),
+                props.binance().readTimeout());
+        validateProvider(
+                "market-rates.binance-futures",
+                props.binanceFutures().baseUrl(),
+                props.binanceFutures().connectTimeout(),
+                props.binanceFutures().readTimeout());
         if (props.scale().values().stream().anyMatch(s -> s < 0)) {
             throw new IllegalStateException("market-rates.scale must not be negative");
         }
@@ -72,20 +72,47 @@ final class AssetCatalog {
         }
     }
 
+    private static void validateProvider(String at, String baseUrl, Duration connect, Duration read) {
+        if (!notBlank(baseUrl)) {
+            throw new IllegalStateException(at + ".base-url is required");
+        }
+        if (connect.isNegative() || connect.isZero()) {
+            throw new IllegalStateException(at + ".connect-timeout must be positive");
+        }
+        if (read.isNegative() || read.isZero()) {
+            throw new IllegalStateException(at + ".read-timeout must be positive");
+        }
+    }
+
     /**
      * A provider's calls are sequential, so its worst-case poll is assets x (connect + read timeout). Longer than
      * the poll interval is a warning, not a failure: polls are fixed-delay, so a slow one delays the next and never
      * overlaps it, and adding an asset must stay a config change (spec 0001, criterion 2).
      */
     private static void validateBudget(MarketRatesProperties props, List<Asset> assets) {
-        long binanceAssets =
-                assets.stream().filter(a -> "binance".equals(a.provider())).count();
-        Duration perCall = props.binance().connectTimeout().plus(props.binance().readTimeout());
-        if (perCall.multipliedBy(binanceAssets).compareTo(props.pollInterval()) > 0) {
+        warnIfOverBudget(
+                props,
+                assets,
+                "binance",
+                props.binance().connectTimeout(),
+                props.binance().readTimeout());
+        warnIfOverBudget(
+                props,
+                assets,
+                "binance-futures",
+                props.binanceFutures().connectTimeout(),
+                props.binanceFutures().readTimeout());
+    }
+
+    private static void warnIfOverBudget(
+            MarketRatesProperties props, List<Asset> assets, String provider, Duration connect, Duration read) {
+        long count = assets.stream().filter(a -> provider.equals(a.provider())).count();
+        if (connect.plus(read).multipliedBy(count).compareTo(props.pollInterval()) > 0) {
             log.warn(
                     "A slow provider can make a poll longer than market-rates.poll-interval; rates may go stale"
-                            + " provider=binance assets={}",
-                    binanceAssets);
+                            + " provider={} assets={}",
+                    provider,
+                    count);
         }
     }
 

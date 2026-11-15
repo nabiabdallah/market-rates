@@ -511,6 +511,150 @@ class RatesServiceTest {
         assertThat(after.asOf()).isEqualTo(quoteTimeNew);
     }
 
+    // Spec 0002 -------------------------------------------------------------------------------------------------
+
+    private static Asset typed(String id, String symbol, String provider, AssetKind kind, int scale) {
+        return new Asset(id, id, kind, provider, symbol, "USDT", scale, RoundingMode.HALF_EVEN);
+    }
+
+    private final Asset xau = typed("xau-usdt", "XAUUSDT", "binance-futures", AssetKind.METAL, 2);
+    private final Asset nvda = typed("nvda-usdt", "NVDAUSDT", "binance-futures", AssetKind.EQUITY, 2);
+    private final Asset spy = typed("spy-usdt", "SPYUSDT", "binance-futures", AssetKind.INDEX, 2);
+    private final Asset eur = typed("eur-usdt", "EURUSDT", "binance", AssetKind.FX, 5);
+    private final FakeGateway futures = new FakeGateway("binance-futures");
+
+    // Criterion 4: asOf is the provider time
+    @Test
+    void a_futures_asset_takes_the_provider_quote_time_as_as_of_and_the_price_at_its_scale() {
+        var quoteTime = Instant.parse("2026-11-15T10:15:30Z");
+        futures.returns(Map.of("XAUUSDT", new ProviderQuote(new BigDecimal("3843.85"), quoteTime)));
+        var service = service(List.of(xau), futures);
+        clock.advance(Duration.ofSeconds(3));
+
+        service.poll("binance-futures");
+
+        var rate = service.get("xau-usdt");
+        assertThat(rate.rate().value()).isEqualByComparingTo("3843.85");
+        assertThat(rate.asOf()).isEqualTo(quoteTime);
+        assertThat(rate.asset().kind()).isEqualTo(AssetKind.METAL);
+        assertThat(rate.stale()).isFalse();
+    }
+
+    // Criterion 5
+    @Test
+    void an_equity_price_is_rounded_half_even_to_scale_two() {
+        futures.returns(Map.of(
+                "NVDAUSDT", new ProviderQuote(new BigDecimal("161.33000"), null),
+                "SPYUSDT", new ProviderQuote(new BigDecimal("512.345"), null)));
+        var service = service(List.of(nvda, spy), futures);
+
+        service.poll("binance-futures");
+
+        assertThat(service.get("nvda-usdt").rate().value()).isEqualTo(new BigDecimal("161.33"));
+        assertThat(service.get("nvda-usdt").rate().value().scale()).isEqualTo(2);
+        assertThat(service.get("spy-usdt").rate().value()).isEqualTo(new BigDecimal("512.34"));
+    }
+
+    // Criterion 6
+    @Test
+    void a_spot_fx_price_is_rounded_to_scale_five() {
+        binance.returns(Map.of("EURUSDT", quote("1.09890000")));
+        var service = service(List.of(eur), binance);
+
+        service.poll("binance");
+
+        var value = service.get("eur-usdt").rate().value();
+        assertThat(value).isEqualTo(new BigDecimal("1.09890"));
+        assertThat(value.scale()).isEqualTo(5);
+    }
+
+    // Criterion 9
+    @Test
+    void a_failing_futures_provider_leaves_spot_updating_and_keeps_the_last_futures_rate() {
+        var service = service(List.of(btc, eur, xau), binance, futures);
+        var quoteTime = Instant.parse("2026-11-14T09:59:50Z");
+        binance.returns(Map.of("BTCUSDT", quote("100"), "EURUSDT", quote("1.1")));
+        futures.returns(Map.of("XAUUSDT", new ProviderQuote(new BigDecimal("3800.10"), quoteTime)));
+        service.poll("binance");
+        service.poll("binance-futures");
+        clock.advance(Duration.ofSeconds(10));
+        binance.returns(Map.of("BTCUSDT", quote("101"), "EURUSDT", quote("1.2")));
+        futures.throwing(new RateProviderException("HTTP 451"));
+
+        service.poll("binance-futures");
+        service.poll("binance");
+
+        assertThat(service.get("btc-usdt").rate().value()).isEqualByComparingTo("101");
+        assertThat(service.get("eur-usdt").rate().value()).isEqualByComparingTo("1.2");
+        assertThat(service.get("eur-usdt").asOf()).isEqualTo(T0.plusSeconds(10));
+        assertThat(service.get("xau-usdt").rate().value()).isEqualByComparingTo("3800.10");
+        assertThat(service.get("xau-usdt").asOf()).isEqualTo(quoteTime);
+    }
+
+    @Test
+    void a_failing_futures_provider_is_logged_with_its_name_only() {
+        var service = service(List.of(xau), futures);
+        futures.throwing(new RateProviderException("secret-detail"));
+
+        try (var logs = LogCapture.start()) {
+            assertThatCode(() -> service.poll("binance-futures")).doesNotThrowAnyException();
+
+            assertThat(logs.warnText()).contains("binance-futures").contains("RateProviderException");
+            assertThat(logs.text()).doesNotContain("secret-detail").doesNotContain("XAUUSDT");
+        }
+    }
+
+    @Test
+    void an_unlisted_futures_symbol_leaves_only_that_asset_never_fetched() {
+        futures.returns(Map.of("NVDAUSDT", quote("161.33")));
+        var service = service(List.of(xau, nvda), futures);
+
+        service.poll("binance-futures");
+
+        assertThat(service.list().get(0).rate()).isNull();
+        assertThat(service.list().get(0).stale()).isTrue();
+        assertThat(service.list().get(1).rate().value()).isEqualByComparingTo("161.33");
+    }
+
+    @Test
+    void polling_futures_only_hands_it_the_futures_assets() {
+        var service = service(List.of(btc, xau, eur, nvda), binance, futures);
+
+        service.poll("binance-futures");
+
+        assertThat(futures.calls).hasSize(1);
+        assertThat(futures.calls.get(0)).containsExactly(xau, nvda);
+        assertThat(binance.calls).isEmpty();
+    }
+
+    // Criterion 13
+    @Test
+    void a_stale_futures_asset_keeps_its_original_as_of_and_is_flagged_stale() {
+        var quoteTime = Instant.parse("2026-11-14T09:00:00Z");
+        futures.returns(Map.of("XAUUSDT", new ProviderQuote(new BigDecimal("3843.85"), quoteTime)));
+        var service = service(List.of(xau), futures);
+        service.poll("binance-futures");
+
+        clock.advance(STALE_AFTER.plusSeconds(1));
+        var rate = service.get("xau-usdt");
+
+        assertThat(rate.stale()).isTrue();
+        assertThat(rate.asOf()).isEqualTo(quoteTime);
+        assertThat(rate.rate().value()).isEqualByComparingTo("3843.85");
+    }
+
+    @Test
+    void a_futures_quote_time_older_than_stale_after_does_not_make_a_freshly_fetched_asset_stale() {
+        var quoteTime = T0.minus(Duration.ofHours(60));
+        futures.returns(Map.of("XAUUSDT", new ProviderQuote(new BigDecimal("3843.85"), quoteTime)));
+        var service = service(List.of(xau), futures);
+
+        service.poll("binance-futures");
+
+        assertThat(service.get("xau-usdt").stale()).isFalse();
+        assertThat(service.get("xau-usdt").asOf()).isEqualTo(quoteTime);
+    }
+
     @Test
     void service_does_not_mutate_the_configured_asset_list_it_was_given() {
         var assets = new ArrayList<>(List.of(btc, eth));
